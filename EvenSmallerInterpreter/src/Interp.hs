@@ -1,34 +1,54 @@
 module Interp where
 
-import qualified Data.Map.Strict as Map
+data BinOp
+    = Plus
+    | Concat
+    | Division
+    deriving (Show, Eq)
 
-type Symbol = String
+data Type
+    = NumT
+    | StrT
+    deriving (Show, Eq)
 
 data Value
     = NumV Float
-    | BoolV Bool
+    | StrV String
     deriving (Show, Eq)
-
-type Environment = Map.Map Symbol Value
-
-emptyEnv :: Environment
-emptyEnv = Map.empty
 
 data Expr
-    = NumE Float
-    | BoolE Bool
-    | PlusE Expr Expr
-    | VarE Symbol
+    = BinE BinOp Expr Expr
+    | NumE Float
+    | StrE String
     deriving (Show, Eq)
 
-interp :: Expr -> Environment -> Value
-interp (NumE n) _env = NumV n
-interp (BoolE n) _env = BoolV n
-interp (VarE sym) env =
-    case Map.lookup sym env of
-        Just v -> v
-        Nothing -> error ("Unbound identifier: " ++ sym)
-interp (PlusE lhs rhs) env =
-    case (interp lhs env, interp rhs env) of
-        (NumV a, NumV b) -> NumV (a + b)
-        _ -> error "Not adding numbers"
+calc :: Expr -> Value
+calc (NumE n) = NumV n
+calc (StrE s) = StrV s
+calc (BinE Division (NumE n) (NumE m)) = NumV(n / m)
+calc (BinE Division _ _ ) = error "Type Error, Division requires two numbers"
+calc (BinE Plus (NumE n) (NumE m)) = NumV(n + m)
+calc (BinE Plus _ _) = error "Type Error, Plus requires two numbers"
+calc (BinE Concat (StrE n) (StrE m)) = StrV(n ++ m)
+calc (BinE Concat _ _) = error "Type Error, Concat requires two strings"
+
+
+tc :: Expr -> Type
+tc (BinE Plus lhs rhs) =
+    case (tc lhs, tc rhs) of
+        (NumT, NumT) -> NumT
+        _ -> error "Type Error - Plus Requires Two Numbers"
+
+tc (BinE Division lhs rhs) =
+    case (tc lhs, tc rhs) of
+        (NumT, NumT) -> NumT
+        _ -> error "Type Error - Division Requires Two Numbers"
+
+
+tc (BinE Concat lhs rhs) =
+    case (tc lhs, tc rhs) of
+        (StrT, StrT) -> StrT
+        _ -> error "Type Error - Concat Requires Two Strings"
+
+tc (NumE _) = NumT
+tc (StrE _) = StrT
