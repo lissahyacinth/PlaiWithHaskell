@@ -24,6 +24,12 @@ main = hspec $ do
             interp (CondE (BoolE False) (NumE 1) (NumE 2)) emptyEnv `shouldBe` NumV 2
 
     describe "closures" $ do
+        it "simple_closure" $
+        -- f = lambda y: x
+        -- f(1) -> 1
+            interp (
+                    AppE (LamE "'y" (VarE "'y")) (NumE 1)
+                ) emptyEnv `shouldBe` NumV 1
         it "bindings" $
         -- x = 1
         -- f = lambda y: x
