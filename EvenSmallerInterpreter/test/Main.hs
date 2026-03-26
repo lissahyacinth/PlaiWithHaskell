@@ -62,8 +62,8 @@ main = hspec $ do
       calc
         ( desugar
             ( SwitchE
-                [ ("method1", (Let1E "x" NumT (NumE 5) (VarE "x"))),
-                  ("method2", (Let1E "x" NumT (NumE 6) (VarE "x")))
+                [ ("method1", Let1E "x" NumT (NumE 5) (VarE "x")),
+                  ("method2", Let1E "x" NumT (NumE 6) (VarE "x"))
                 ]
                 (StrE "method1")
             )
@@ -75,8 +75,8 @@ main = hspec $ do
         ( desugar
             ( DefineE
                 "myClass"
-                [ ("method1", (Let1E "x" NumT (NumE 5) (VarE "x"))),
-                  ("method2", (Let1E "x" NumT (NumE 6) (VarE "x")))
+                [ ("method1", Let1E "x" NumT (NumE 5) (VarE "x")),
+                  ("method2", Let1E "x" NumT (NumE 6) (VarE "x"))
                 ]
                 ( AppE
                     (VarE "myClass")

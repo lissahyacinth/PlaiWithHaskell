@@ -57,7 +57,7 @@ data Expr
 desugar :: Expr -> Expr
 desugar Unreachable = Unreachable
 -- e.g let sym: t = e1 in e2
-desugar (Let1E sym t e1 e2) = AppE (LamE sym t e2) e1
+desugar (Let1E sym t e1 e2) = AppE (desugar (LamE sym t e2)) (desugar e1)
 desugar (BinE op l r) = BinE op (desugar l) (desugar r)
 desugar (AppE f a) = AppE (desugar f) (desugar a)
 desugar (LamE s t e) = LamE s t (desugar e)
@@ -67,19 +67,14 @@ desugar (StrE s) = StrE s
 desugar (VarE v) = VarE v
 desugar (BoolE v) = BoolE v
 desugar (DefineE className functionList env) =
-  -- Need an AppE to get something into the environment.
-  -- But AppE only takes  (LamE -> FunctionV)
-  -- Let ClassName = DispatchFunction in evaluation
   desugar
     ( Let1E
         className
         StrT
-        ( desugar
-            ( LamE
-                "methodName"
-                StrT
-                (desugar (SwitchE functionList (VarE "methodName")))
-            )
+        ( LamE
+            "methodName"
+            StrT
+            (SwitchE functionList (VarE "methodName"))
         )
         env
     )
@@ -154,6 +149,12 @@ tc (BinE Plus lhs rhs) env =
   case (tc lhs env, tc rhs env) of
     (NumT, NumT) -> NumT
     _ -> error "Type Error - Plus Requires Two Numbers"
+tc (BinE Eq lhs rhs) env =
+  case (tc lhs env, tc rhs env) of
+    (BoolT, BoolT) -> BoolT
+    (NumT, NumT) -> BoolT
+    (StrT, StrT) -> BoolT
+    _ -> error "Type Error - Eq Requires items that resolve to Bool"
 tc (BinE Division lhs rhs) env =
   case (tc lhs env, tc rhs env) of
     (NumT, NumT) -> NumT
@@ -162,6 +163,10 @@ tc (BinE Concat lhs rhs) env =
   case (tc lhs env, tc rhs env) of
     (StrT, StrT) -> StrT
     _ -> error "Type Error - Concat Requires Two Strings"
+tc (SwitchE {}) _ = error "Should be desugared out"
+tc (DefineE {}) _ = error "Should be desugared out"
+tc Unreachable _ = error "Should be unreachable"
+tc (BoolE _) _ = BoolT
 tc (NumE _) _ = NumT
 tc (StrE _) _ = StrT
 tc (VarE sym) env =
