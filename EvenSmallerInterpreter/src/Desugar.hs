@@ -1,6 +1,9 @@
-module Desugar (desugar) where
+module Desugar (desugar, methodNameToMethodFn) where
 
 import Types
+
+methodNameToMethodFn :: String -> Expr
+methodNameToMethodFn methodName = LamE "method" StrT (BinE Eq (StrE methodName) (VarE "method"))
 
 -- Desugaring/MacrosmethodName
 desugar :: Expr -> Expr
@@ -23,24 +26,25 @@ desugar (DefineE className functionList env) =
         ( LamE
             "methodName"
             StrT
-            (SwitchE functionList (VarE "methodName"))
+            (SwitchE methodList (VarE "methodName"))
         )
         env
     )
+    where methodList = zip (map (methodNameToMethodFn . fst) functionList) (map snd functionList)
 -- Peel off the top item, add it to conditional with the next part as the remaining list
 desugar (SwitchE conditionList conditionArg) =
   case conditionList of
-    [(methodName, func)] ->
+    [(method, func)] ->
       desugar
         ( CondE
-            (AppE (LamE "method" StrT (BinE Eq (StrE methodName) (VarE "method"))) conditionArg)
+            (AppE method conditionArg)
             func
             Unreachable
         )
-    ((methodName, func) : remainingFn) ->
+    ((method, func) : remainingFn) ->
       desugar
         ( CondE
-            (AppE (LamE "method" StrT (BinE Eq (StrE methodName) (VarE "method"))) conditionArg)
+            (AppE method conditionArg)
             func
             (SwitchE remainingFn conditionArg)
         )

@@ -82,6 +82,6 @@ data Expr
   | Let1E Symbol Type Expr Expr -- Desugared out
   -- Class Name is constructed of Functions
   | DefineE Symbol [(String, Expr)] Expr -- Define X as a List of Expressions
-  | SwitchE [(String, Expr)] Expr
+  | SwitchE [(Expr, Expr)] Expr
   | Unreachable
   deriving (Show, Eq)

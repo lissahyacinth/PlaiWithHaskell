@@ -2,9 +2,9 @@ import Control.Exception (evaluate)
 import Data.IORef (newIORef)
 import qualified Data.Map as Map
 import qualified Data.Vector.Mutable as MV
-import Desugar (desugar)
+import Desugar (desugar, methodNameToMethodFn)
 import Interp (calc)
-import Store
+import Store 
 import Test.Hspec
 import TypeCheck (tc)
 import Types
@@ -82,8 +82,8 @@ main = hspec $ do
       run
         ( desugar
             ( SwitchE
-                [ ("method1", Let1E "x" NumT (NumE 5) (VarE "x")),
-                  ("method2", Let1E "x" NumT (NumE 6) (VarE "x"))
+                [ (methodNameToMethodFn "method1", Let1E "x" NumT (NumE 5) (VarE "x")),
+                  (methodNameToMethodFn "method2", Let1E "x" NumT (NumE 6) (VarE "x"))
                 ]
                 (StrE "method1")
             )
