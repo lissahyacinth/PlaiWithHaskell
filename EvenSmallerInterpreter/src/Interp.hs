@@ -1,197 +1,72 @@
-module Interp where
+module Interp (calc) where
 
-import Data.Map (Map)
 import qualified Data.Map as Map
+import Store (Store, readStoredValue, storeValue, writeStoredValue)
+import Types
 
-emptyEnv :: Environment
-emptyEnv = Map.empty
-
-emptyTEnv :: TypeEnvironment
-emptyTEnv = Map.empty
-
-type Symbol = String
-
-type Environment = Map Symbol Value
-
-type TypeEnvironment = Map Symbol Type
-
-data BinOp
-  = Plus
-  | Concat
-  | Division
-  | Eq
-  deriving (Show, Eq)
-
-data Type
-  = NumT
-  | StrT
-  | VarT
-  | BoolT
-  | FunctionT Type Type -- Input Type -> Output Type
-  deriving (Show, Eq)
-
-data Value
-  = NumV Float
-  | StrV String
-  | BoolV Bool
-  | FunctionV Symbol Expr Environment -- Symbol, Body, Environment
-  deriving (Show, Eq)
-
-data Expr
-  = BinE BinOp Expr Expr
-  | BoolE Bool
-  | NumE Float
-  | StrE String
-  | VarE Symbol
-  | LamE Symbol Type Expr
-  | CondE Expr Expr Expr -- Conditional -> Bool IfTrue IfFalse
-  | AppE Expr Expr -- Function, Argument (Calculate Function with Argument in Context)
-  | Let1E Symbol Type Expr Expr -- Desugared out
-  -- Class Name is constructed of Functions
-  | DefineE Symbol [(String, Expr)] Expr -- Define X as a List of Expressions
-  | SwitchE [(String, Expr)] Expr
-  | Unreachable
-  deriving (Show, Eq)
-
--- Desugaring/MacrosmethodName
-desugar :: Expr -> Expr
-desugar Unreachable = Unreachable
--- e.g let sym: t = e1 in e2
-desugar (Let1E sym t e1 e2) = AppE (desugar (LamE sym t e2)) (desugar e1)
-desugar (BinE op l r) = BinE op (desugar l) (desugar r)
-desugar (AppE f a) = AppE (desugar f) (desugar a)
-desugar (LamE s t e) = LamE s t (desugar e)
-desugar (CondE cond pos neg) = CondE (desugar cond) (desugar pos) (desugar neg)
-desugar (NumE f) = NumE f
-desugar (StrE s) = StrE s
-desugar (VarE v) = VarE v
-desugar (BoolE v) = BoolE v
-desugar (DefineE className functionList env) =
-  desugar
-    ( Let1E
-        className
-        StrT
-        ( LamE
-            "methodName"
-            StrT
-            (SwitchE functionList (VarE "methodName"))
-        )
-        env
-    )
--- Peel off the top item, add it to conditional with the next part as the remaining list
-desugar (SwitchE conditionList conditionArg) =
-  case conditionList of
-    [(methodName, func)] ->
-      desugar
-        ( CondE
-            (AppE (LamE "method" StrT (BinE Eq (StrE methodName) (VarE "method"))) conditionArg)
-            func
-            Unreachable
-        )
-    ((methodName, func) : remainingFn) ->
-      desugar
-        ( CondE
-            (AppE (LamE "method" StrT (BinE Eq (StrE methodName) (VarE "method"))) conditionArg)
-            func
-            (SwitchE remainingFn conditionArg)
-        )
-    [] -> error "Unknown case"
-
-calc :: Expr -> Environment -> Value
-calc (SwitchE _ _) _ = error "Should be desugared out"
-calc (DefineE {}) _ = error "Should be desugared out"
-calc Unreachable _ = error "Should be unreachable"
-calc (NumE n) _ = NumV n
-calc (StrE s) _ = StrV s
-calc (BoolE e) _ = BoolV e
-calc (CondE cond pos neg) env =
-  case calc cond env of
-    BoolV True -> calc pos env
-    BoolV False -> calc neg env
-    FunctionV {} -> error "Received FunctionV, expected BoolV"
-    _ -> error "Type Error, expected BoolV"
-calc (VarE sym) env =
+calc :: Expr -> Store -> Environment -> IO StoredValue
+calc (SwitchE _ _) _ _ = error "Should be desugared out"
+calc (DefineE {}) _ _ = error "Should be desugared out"
+calc Unreachable _ _ = error "Should be unreachable"
+calc (NumE n) s _ = do
+  (_, addr) <- storeValue s (NumV n)
+  return (NumSV addr)
+calc (StrE s) st _ = do
+  (_, addr) <- storeValue st (StrV s)
+  return (StrSV addr)
+calc (BoolE e) st _ = do
+  (_, addr) <- storeValue st (BoolV e)
+  return (BoolSV addr)
+calc (CondE cond pos neg) sto env = do
+  val <- calc cond sto env >>= readStoredValue sto 
+  case val of
+    BoolV True -> calc pos sto env
+    BoolV False -> calc neg sto env
+    other -> error $ "Expected BoolV, received " ++ show other
+calc (VarE sym) _ env = do
   case Map.lookup sym env of
-    Just v -> v
+    Just v -> return v
     Nothing -> error ("Unbound identifier: " ++ sym)
-calc (LamE sym _ expr) env = FunctionV sym expr env
-calc (AppE fun arg) env =
-  case calc fun env of
-    FunctionV sym fn_body fnEnv -> calc fn_body (Map.insert sym (calc arg env) fnEnv)
+calc (LamE sym _ expr) memStore env = do
+  (_, memAddr) <- storeValue memStore (FunctionV sym expr env)
+  return (ClosureSV memAddr)
+calc (AppE fun arg) sto env = do
+  res <- calc fun sto env >>= readStoredValue sto
+  argValue <- calc arg sto env
+  case res of
+    FunctionV sym fn_body fnEnv -> calc fn_body sto (Map.insert sym argValue fnEnv)
     _ -> error "Type error, expected FunctionV"
 -- Calculation/Evaluation
-calc (BinE Eq lhs rhs) env =
-  case (calc lhs env, calc rhs env) of
-    (BoolV a, BoolV b) -> BoolV (a == b)
-    (StrV a, StrV b) -> BoolV (a == b)
-    (NumV a, NumV b) -> BoolV (a == b)
+calc (BinE Eq lhs rhs) sto env = do
+  lhsEval <- calc lhs sto env >>= readStoredValue sto
+  rhsEval <- calc rhs sto env >>= readStoredValue sto
+  case (lhsEval, rhsEval) of
+    (BoolV a, BoolV b) -> writeStoredValue sto (BoolV (a == b))
+    (StrV a, StrV b) -> writeStoredValue sto (BoolV (a == b))
+    (NumV a, NumV b) -> writeStoredValue sto (BoolV (a == b))
     _ -> error "Type Error"
-calc (BinE Division (NumE n) (NumE m)) _ = NumV (n / m)
-calc (BinE Division lhs rhs) env =
-  case (calc lhs env, calc rhs env) of
-    (NumV a, NumV b) -> NumV (a / b)
+calc (BinE Division (NumE n) (NumE m)) sto _ = do
+  writeStoredValue sto (NumV (n / m))
+calc (BinE Division lhs rhs) sto env = do
+  lhsEval <- calc lhs sto env >>= readStoredValue sto
+  rhsEval <- calc rhs sto env >>= readStoredValue sto
+  case (lhsEval, rhsEval) of
+    (NumV a, NumV b) -> writeStoredValue sto (NumV (a / b))
+    other -> error $ "Expected NumV, found " ++ show other
+calc (BinE Plus (NumE lhs) (NumE rhs)) sto _ = do
+  writeStoredValue sto (NumV (lhs + rhs))
+calc (BinE Plus lhs rhs) sto env = do
+  lhsEval <- calc lhs sto env >>= readStoredValue sto
+  rhsEval <- calc rhs sto env >>= readStoredValue sto
+  case (lhsEval, rhsEval) of
+    (NumV a, NumV b) -> writeStoredValue sto (NumV (a + b))
+    other -> error $ "Expected NumV, found " ++ show other
+calc (BinE Concat (StrE n) (StrE m)) sto _ = do
+  writeStoredValue sto (StrV (n ++ m))
+calc (BinE Concat lhs rhs) sto env = do
+  lhsEval <- calc lhs sto env >>= readStoredValue sto
+  rhsEval <- calc rhs sto env >>= readStoredValue sto
+  case (lhsEval, rhsEval) of
+    (StrV a, StrV b) -> writeStoredValue sto (StrV (a ++ b))
     _ -> error "Type error"
-calc (BinE Plus (NumE n) (NumE m)) _ = NumV (n + m)
-calc (BinE Plus lhs rhs) env =
-  case (calc lhs env, calc rhs env) of
-    (NumV a, NumV b) -> NumV (a + b)
-    _ -> error "Type error"
-calc (BinE Concat (StrE n) (StrE m)) _ = StrV (n ++ m)
-calc (BinE Concat lhs rhs) env =
-  case (calc lhs env, calc rhs env) of
-    (StrV a, StrV b) -> StrV (a ++ b)
-    _ -> error "Type error"
-calc (Let1E {}) _ = error "Should be desugared out"
-
--- Type Checking
-tc :: Expr -> TypeEnvironment -> Type
-tc (BinE Plus lhs rhs) env =
-  case (tc lhs env, tc rhs env) of
-    (NumT, NumT) -> NumT
-    _ -> error "Type Error - Plus Requires Two Numbers"
-tc (BinE Eq lhs rhs) env =
-  case (tc lhs env, tc rhs env) of
-    (BoolT, BoolT) -> BoolT
-    (NumT, NumT) -> BoolT
-    (StrT, StrT) -> BoolT
-    _ -> error "Type Error - Eq Requires items that resolve to Bool"
-tc (BinE Division lhs rhs) env =
-  case (tc lhs env, tc rhs env) of
-    (NumT, NumT) -> NumT
-    _ -> error "Type Error - Division Requires Two Numbers"
-tc (BinE Concat lhs rhs) env =
-  case (tc lhs env, tc rhs env) of
-    (StrT, StrT) -> StrT
-    _ -> error "Type Error - Concat Requires Two Strings"
-tc (SwitchE {}) _ = error "Should be desugared out"
-tc (DefineE {}) _ = error "Should be desugared out"
-tc Unreachable _ = error "Should be unreachable"
-tc (BoolE _) _ = BoolT
-tc (NumE _) _ = NumT
-tc (StrE _) _ = StrT
-tc (VarE sym) env =
-  case Map.lookup sym env of
-    Just v -> v
-    Nothing -> error ("Unbound identifier: " ++ sym)
-tc (LamE sym t1 expr) env =
-  FunctionT t1 (tc expr (Map.insert sym t1 env))
-tc (AppE fun arg) env =
-  -- \|- C: U, |- A: U, |- B: D
-  -- -------------------------
-  -- AppE (LamE A B) C : D
-  case tc fun env of
-    FunctionT inType outType ->
-      if tc arg env == inType
-        then outType
-        else error "Argument didn't match Argument Type"
-    _ -> error "Expect function type within lambda"
-tc (CondE cond pos neg) env =
-  case tc cond env of
-    BoolT
-      | posT == negT -> posT
-      | otherwise -> error "Expected positive and negative branches to share type"
-    _ -> error "Expect Bool from conditional"
-  where
-    posT = tc pos env
-    negT = tc neg env
-tc (Let1E {}) _ = error "Should be desugared out"
+calc (Let1E {}) _ _ = error "Should be desugared out"

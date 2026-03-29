@@ -1,35 +1,55 @@
 import Control.Exception (evaluate)
-import Interp (BinOp (..), Expr (..), Type (..), Value (..), calc, desugar, emptyEnv, emptyTEnv, tc)
+import Data.IORef (newIORef)
+import qualified Data.Map as Map
+import qualified Data.Vector.Mutable as MV
+import Desugar (desugar)
+import Interp (calc)
+import Store
 import Test.Hspec
+import TypeCheck (tc)
+import Types
+
+mkStore :: IO Store
+mkStore = do
+  mem <- MV.new 1024
+  addr <- newIORef 0
+  return (Store mem addr)
+
+-- Run calc and resolve the StoredValue back to a Value
+run :: Expr -> Environment -> IO Value
+run expr env = do
+  s <- mkStore
+  sv <- calc expr s env
+  readStoredValue s sv
 
 main :: IO ()
 main = hspec $ do
   describe "addition" $ do
     it "adds two numbers" $
-      calc (BinE Plus (NumE 1) (NumE 2)) emptyEnv `shouldBe` NumV 3
+      run (BinE Plus (NumE 1) (NumE 2)) emptyEnv `shouldReturn` NumV 3
     it "concats two strings" $
-      calc (BinE Concat (StrE "1") (StrE "2")) emptyEnv `shouldBe` StrV "12"
+      run (BinE Concat (StrE "1") (StrE "2")) emptyEnv `shouldReturn` StrV "12"
   describe "division" $ do
     it "divide two numbers" $
-      calc (BinE Division (NumE 1) (NumE 2)) emptyEnv `shouldBe` NumV 0.5
+      run (BinE Division (NumE 1) (NumE 2)) emptyEnv `shouldReturn` NumV 0.5
 
   describe "lambdas and application" $ do
     it "identity function returns its argument" $
       -- (\x : Num -> x) 5
-      calc (AppE (LamE "x" NumT (VarE "x")) (NumE 5)) emptyEnv `shouldBe` NumV 5
+      run (AppE (LamE "x" NumT (VarE "x")) (NumE 5)) emptyEnv `shouldReturn` NumV 5
     it "constant function ignores second argument" $
       -- (\x : Num -> (\y : Num -> x)) 7 99
-      calc (AppE (AppE (LamE "x" NumT (LamE "y" NumT (VarE "x"))) (NumE 7)) (NumE 99)) emptyEnv `shouldBe` NumV 7
+      run (AppE (AppE (LamE "x" NumT (LamE "y" NumT (VarE "x"))) (NumE 7)) (NumE 99)) emptyEnv `shouldReturn` NumV 7
     it "lambda with plus in body" $
       -- (\x : Num -> x + 1) 4
-      calc (AppE (LamE "x" NumT (BinE Plus (VarE "x") (NumE 1))) (NumE 4)) emptyEnv `shouldBe` NumV 5
+      run (AppE (LamE "x" NumT (BinE Plus (VarE "x") (NumE 1))) (NumE 4)) emptyEnv `shouldReturn` NumV 5
     it "nested application with plus" $
       -- (\f : Fn -> f 3) (\x : Num -> x + 10)
-      calc (AppE (LamE "f" (FunctionT NumT NumT) (AppE (VarE "f") (NumE 3))) (LamE "x" NumT (BinE Plus (VarE "x") (NumE 10)))) emptyEnv `shouldBe` NumV 13
+      run (AppE (LamE "f" (FunctionT NumT NumT) (AppE (VarE "f") (NumE 3))) (LamE "x" NumT (BinE Plus (VarE "x") (NumE 10)))) emptyEnv `shouldReturn` NumV 13
     it "applying non-function throws" $
-      evaluate (calc (AppE (NumE 1) (NumE 2)) emptyEnv) `shouldThrow` anyException
+      run (AppE (NumE 1) (NumE 2)) emptyEnv `shouldThrow` anyException
     it "unbound variable throws" $
-      evaluate (calc (VarE "x") emptyEnv) `shouldThrow` anyException
+      run (VarE "x") emptyEnv `shouldThrow` anyException
     it "lexical scoping - closure captures definition environment" $
       -- let x = 1 in (let f = (\y -> x + y) in (let x = 99 in f 0))
       -- should return 1, not 99
@@ -55,11 +75,11 @@ main = hspec $ do
                   )
               )
               (NumE 1)
-       in calc expr emptyEnv `shouldBe` NumV 1
+       in run expr emptyEnv `shouldReturn` NumV 1
 
   describe "Calculating Switch" $ do
     it "desugars and calculates a conditionList" $
-      calc
+      run
         ( desugar
             ( SwitchE
                 [ ("method1", Let1E "x" NumT (NumE 5) (VarE "x")),
@@ -69,9 +89,9 @@ main = hspec $ do
             )
         )
         emptyEnv
-        `shouldBe` NumV 5
+        `shouldReturn` NumV 5
     it "desugars a classE" $
-      calc
+      run
         ( desugar
             ( DefineE
                 "myClass"
@@ -85,15 +105,15 @@ main = hspec $ do
             )
         )
         emptyEnv
-        `shouldBe` NumV 5
+        `shouldReturn` NumV 5
 
   describe "desugaring Let1E" $ do
     it "let x : Num = 5 in x" $
-      calc (desugar (Let1E "x" NumT (NumE 5) (VarE "x"))) emptyEnv `shouldBe` NumV 5
+      run (desugar (Let1E "x" NumT (NumE 5) (VarE "x"))) emptyEnv `shouldReturn` NumV 5
     it "let x : Num = 2 in x + 3" $
-      calc (desugar (Let1E "x" NumT (NumE 2) (BinE Plus (VarE "x") (NumE 3)))) emptyEnv `shouldBe` NumV 5
+      run (desugar (Let1E "x" NumT (NumE 2) (BinE Plus (VarE "x") (NumE 3)))) emptyEnv `shouldReturn` NumV 5
     it "nested let - let x : Num = 1 in let y : Num = 2 in x + y" $
-      calc (desugar (Let1E "x" NumT (NumE 1) (desugar (Let1E "y" NumT (NumE 2) (BinE Plus (VarE "x") (VarE "y")))))) emptyEnv `shouldBe` NumV 3
+      run (desugar (Let1E "x" NumT (NumE 1) (desugar (Let1E "y" NumT (NumE 2) (BinE Plus (VarE "x") (VarE "y")))))) emptyEnv `shouldReturn` NumV 3
     it "let shadows outer binding" $
       let expr =
             desugar
@@ -103,7 +123,7 @@ main = hspec $ do
                   (NumE 10)
                   (desugar (Let1E "x" NumT (NumE 20) (VarE "x")))
               )
-       in calc expr emptyEnv `shouldBe` NumV 20
+       in run expr emptyEnv `shouldReturn` NumV 20
 
   describe "type checking" $ do
     it "addition" $
@@ -140,3 +160,38 @@ main = hspec $ do
       tc (desugar (Let1E "x" NumT (NumE 5) (BinE Plus (VarE "x") (NumE 1)))) emptyTEnv `shouldBe` NumT
     it "desugared let catches type error - let x : Num = \"hi\" in x + 1" $
       evaluate (tc (desugar (Let1E "x" NumT (StrE "hi") (BinE Plus (VarE "x") (NumE 1)))) emptyTEnv) `shouldThrow` anyException
+
+  describe "store round-trip" $ do
+    it "stores and loads a NumV" $ do
+      s <- mkStore
+      (_, addr) <- storeValue s (NumV 42)
+      val <- readValue s addr
+      val `shouldBe` NumV 42
+
+    it "stores and loads a StrV" $ do
+      s <- mkStore
+      (_, addr) <- storeValue s (StrV "hello")
+      val <- readValue s addr
+      val `shouldBe` StrV "hello"
+
+    it "stores and loads a BoolV" $ do
+      s <- mkStore
+      (_, addr) <- storeValue s (BoolV True)
+      val <- readValue s addr
+      val `shouldBe` BoolV True
+
+    it "stores and loads a FunctionV with empty env" $ do
+      s <- mkStore
+      let closure = FunctionV "x" (BinE Plus (VarE "x") (NumE 1)) Map.empty
+      (_, addr) <- storeValue s closure
+      val <- readValue s addr
+      val `shouldBe` closure
+
+    it "stores and loads a FunctionV with captured env" $ do
+      s <- mkStore
+      (_, yAddr) <- storeValue s (NumV 10)
+      let env = Map.fromList [("y", NumSV yAddr)]
+      let closure = FunctionV "x" (BinE Plus (VarE "x") (VarE "y")) env
+      (_, addr) <- storeValue s closure
+      val <- readValue s addr
+      val `shouldBe` closure
